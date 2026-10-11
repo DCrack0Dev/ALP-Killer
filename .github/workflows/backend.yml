@@ -1,0 +1,28 @@
+name: Backend quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install '.[dev]'
+      - name: Lint
+        run: ruff check app tests
+      - name: Tests
+        env:
+          APP_ENV: test
+          JWT_SECRET: test-jwt-secret-only-for-ci
+          CREDENTIAL_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+          BOOTSTRAP_PASSPHRASE: ci-passphrase
+        run: pytest --cov=app --cov-report=term-missing

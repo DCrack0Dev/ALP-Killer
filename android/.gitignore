@@ -1,0 +1,15 @@
+# Build and IDE output
+.gradle/
+build/
+**/build/
+.local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+
+# Signing material and developer-local configuration
+*.jks
+*.keystore
+*.p12
+.env

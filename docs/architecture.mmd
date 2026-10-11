@@ -1,0 +1,62 @@
+flowchart TB
+  subgraph Android[Android app — Kotlin / Compose]
+    UI[Secure wizard + dashboard]
+    VM[ViewModels / Flow]
+    K[Keystore-encrypted backend session]
+    STOP[Emergency stop]
+    UI --> VM
+    VM --> K
+    STOP --> VM
+  end
+
+  subgraph Edge[Private HTTPS boundary]
+    RP[Reverse proxy + TLS + firewall]
+  end
+
+  subgraph Backend[Persistent FastAPI backend]
+    AUTH[Session authentication]
+    CONN[Official Alpaca adapter\nserver-side mode validation]
+    DATA[Market-data / account sync]
+    REGIME[Regime router + strategies]
+    NEWS[News provider abstraction]
+    ML[Transparent ML baseline]
+    RISK[Central risk engine]
+    EXEC[Idempotent execution + reconciliation]
+    AUDIT[Structured audit / health logs]
+    KILL[Global kill switch]
+    BT[Event-driven backtester]
+  end
+
+  subgraph Storage[Private storage]
+    DB[(PostgreSQL)]
+    KEYS[Encrypted broker credentials\nFernet / KMS-backed key]
+  end
+
+  Alpaca[Official Alpaca APIs\nPaper / Live / Market data]
+
+  VM -->|HTTPS + Bearer session| RP --> AUTH
+  AUTH --> CONN
+  CONN --> KEYS
+  CONN -->|paper=True / paper=False SDK clients| Alpaca
+  DATA --> Alpaca
+  DATA --> REGIME
+  NEWS --> REGIME
+  ML --> REGIME
+  REGIME --> RISK
+  KILL --> RISK
+  RISK -->|approved only| EXEC
+  EXEC -->|official SDK orders / trade updates| Alpaca
+  EXEC --> AUDIT
+  BT --> AUDIT
+  AUTH --> DB
+  DATA --> DB
+  REGIME --> DB
+  RISK --> DB
+  AUDIT --> DB
+  KILL --> DB
+  STOP -->|authenticated kill request| RP
+
+  classDef warning fill:#7f1d1d,color:#fff,stroke:#f87171;
+  classDef safe fill:#14532d,color:#fff,stroke:#4ade80;
+  class RISK,KILL,STOP warning;
+  class CONN,EXEC,AUDIT safe;
