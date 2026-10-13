@@ -11,6 +11,8 @@ A **single-user Android app and secure FastAPI backend** for a risk-gated Alpaca
 - An emergency kill switch disables both modes and blocks future automated order intents. Deactivation never silently re-enables automation.
 - Every order intent receives a deterministic client order ID. Ambiguous submission failures are reconciled by that ID before any retry.
 - The risk engine is the sole route to broker order submission. It blocks stale data, environment mismatch, disabled automation, kill switch, spread/liquidity/position/exposure/loss/order-frequency/news/shorting/latency failures.
+- The Android client now supports paper risk-limit entry, paper watchlist management, worker-heartbeat visibility, and explicit paper-only enable/disable controls. Paper enablement fails closed unless the verified paper account, risk configuration, watchlist, and worker heartbeat are ready.
+- Docker Compose starts the API, PostgreSQL, and a separate paper worker. Automation remains disabled by default; every worker restart disarms it and requires explicit re-enable. The free Render deployment is API-only and not suitable for an always-on worker.
 - Broker key and secret inputs are Pydantic `SecretStr` values, sent only over HTTPS, encrypted server-side with a Fernet key, and omitted from responses and audit payloads. Android keeps them only in masked UI state, clears them after submission, and stores only its short-lived backend session token via the Android Keystore.
 
 ## Repository layout
@@ -49,7 +51,7 @@ See [android/README.md](android/README.md). The app defaults to an offline-safe 
 
 ## Production deployment
 
-Use [docs/deployment.md](docs/deployment.md) for a private VPS or always-on local host, including HTTPS/reverse proxy, firewall, environment-key generation, database migration, and Android trust configuration. The ordinary Manus sandbox is intentionally not a production trading host because it hibernates.
+Use [docs/deployment.md](docs/deployment.md) for a private VPS or always-on local host, including HTTPS/reverse proxy, firewall, environment-key generation, database migration, paper worker operation, and Android trust configuration. The ordinary Manus sandbox and free Render web services are intentionally not production hosts for continuous automation because they can suspend.
 
 ## Documentation
 

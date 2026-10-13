@@ -11,8 +11,10 @@ import com.alpacatalk.trading.data.ConnectionState
 import com.alpacatalk.trading.data.EnvironmentResponse
 import com.alpacatalk.trading.data.HealthResponse
 import com.alpacatalk.trading.data.RemoteScreenData
+import com.alpacatalk.trading.data.RiskConfigResponse
 import com.alpacatalk.trading.data.TradingUiState
 import com.alpacatalk.trading.data.VerifiedEnvironment
+import com.alpacatalk.trading.data.WatchlistResponse
 import com.alpacatalk.trading.security.BackendUrlStore
 import com.alpacatalk.trading.security.KeystoreSessionStore
 import kotlinx.coroutines.async
@@ -27,6 +29,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 
 /**
  * UI state contains only server-derived summaries. It intentionally has no fields for a broker key,
@@ -205,7 +208,12 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
                 val account = async { activeClient.account() }
                 val environment = async { activeClient.environment() }
                 val automation = async { activeClient.automationStatus() }
-                DashboardSnapshot(account.await(), environment.await(), automation.await())
+                val riskConfig = async { activeClient.riskConfig() }
+                val watchlist = async { activeClient.watchlist() }
+                DashboardSnapshot(
+                    account.await(), environment.await(), automation.await(),
+                    riskConfig.await(), watchlist.await(),
+                )
             }
             val verifiedEnvironment = VerifiedEnvironment.fromServer(
                 snapshot.environment.environment,
@@ -221,6 +229,8 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
                     environment = verifiedEnvironment,
                     environmentDetails = snapshot.environment,
                     automation = snapshot.automation,
+                    riskConfig = snapshot.riskConfig,
+                    watchlist = snapshot.watchlist,
                     health = health,
                 )
             }
@@ -236,9 +246,47 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun disableAutomation() {
-        val environment = currentEnvironmentPath()
+        val environment = "paper"
         viewModelScope.launch {
             runAction("Automation disabled.") { disableAutomation(environment) }
+        }
+    }
+
+    fun saveRiskConfig(rawJson: String) {
+        val config = try {
+            ApiClient.JSON.parseToJsonElement(rawJson).jsonObject
+        } catch (_: Exception) {
+            _uiState.update { it.copy(errorMessage = "Enter a valid JSON object of paper risk limits.") }
+            return
+        }
+        viewModelScope.launch {
+            runAction("Paper risk limits saved.") {
+                updateRiskConfig(config)
+                Unit
+            }
+        }
+    }
+
+    fun savePaperWatchlist(rawSymbols: String) {
+        val symbols = rawSymbols.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (symbols.isEmpty()) {
+            _uiState.update { it.copy(errorMessage = "Enter at least one ticker symbol.") }
+            return
+        }
+        viewModelScope.launch {
+            runAction("Paper watchlist saved.") {
+                updateWatchlist(symbols)
+                Unit
+            }
+        }
+    }
+
+    fun enablePaperAutomation() {
+        viewModelScope.launch {
+            runAction("Paper automation enabled.") {
+                this.enablePaperAutomation()
+                Unit
+            }
         }
     }
 
@@ -335,7 +383,12 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
 
     /** Do not surface server response bodies because a faulty server must not echo a submitted secret. */
     private fun safeMessage(error: Exception, fallback: String): String = when (error) {
-        is ApiException -> if (error.statusCode == 401) "Session was rejected. Reconnect to the backend." else fallback
+        is ApiException -> when (error.statusCode) {
+            401 -> "Session was rejected. Reconnect to the backend."
+            409 -> "Paper setup is incomplete. Check the verified paper connection, risk limits, watchlist, worker heartbeat, and kill switch."
+            422 -> "Paper settings were rejected. Check required fields and ticker formats."
+            else -> fallback
+        }
         else -> fallback
     }
 
@@ -346,6 +399,8 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         val account: AccountResponse,
         val environment: EnvironmentResponse,
         val automation: AutomationStatusResponse,
+        val riskConfig: RiskConfigResponse,
+        val watchlist: WatchlistResponse,
     )
 
     private companion object {

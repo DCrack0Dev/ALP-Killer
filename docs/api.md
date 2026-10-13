@@ -12,7 +12,7 @@ FastAPI exposes a machine-readable OpenAPI document at `/openapi.json` and inter
 | Research | `POST /api/v1/backtests`, `GET /api/v1/backtests/{id}` | Backtests run without broker order calls and return explicit execution assumptions. |
 | Broker state | `GET /api/v1/positions`, `GET /api/v1/orders`, `GET /api/v1/fills`, `GET /api/v1/performance` | Reads broker/local reconciled state; submission success is never presented as a fill. |
 | Risk | `GET/PUT /api/v1/risk/config` | Stores environment-specific risk limits and returns a configuration fingerprint. |
-| Automation | `GET /api/v1/automation/status`, `POST /api/v1/automation/enable-paper`, `POST /api/v1/automation/enable-live`, `POST /api/v1/automation/disable` | Live enable requires verified live account, complete risk config, exact fingerprint, and literal confirmation. |
+| Automation | `GET /api/v1/automation/status`, `GET/PUT /api/v1/automation/watchlist`, `GET /api/v1/automation/worker-status`, `POST /api/v1/automation/enable-paper`, `POST /api/v1/automation/disable` | Paper enable requires a verified paper account, complete risk limits, a saved watchlist, and a current worker heartbeat. Worker restarts disarm automation and require explicit re-enable. |
 | Safety | `POST /api/v1/kill-switch/activate`, `POST /api/v1/kill-switch/deactivate` | Activation disables automation globally; deactivation does not re-enable it. |
 | Execution | `POST /api/v1/orders/intents` | Server-only order path. It records pre-trade risk and reaches the broker only after approval. |
 | Audit/ops | `GET /api/v1/audit-log`, `GET /api/v1/health`, `WS /api/v1/stream` | Provides redacted audit trace, health, and authenticated status stream. |
@@ -28,4 +28,4 @@ FastAPI exposes a machine-readable OpenAPI document at `/openapi.json` and inter
 }
 ```
 
-A stale fingerprint is rejected. Credentials, raw account identifiers, Fernet ciphertext, and auth passphrases never appear in API responses.
+A stale fingerprint is rejected. This Android client does not expose live activation; keep `ALLOW_LIVE_TRADING=false`. Credentials, raw account identifiers, Fernet ciphertext, and auth passphrases never appear in API responses.

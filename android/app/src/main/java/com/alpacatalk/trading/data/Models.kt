@@ -2,6 +2,7 @@ package com.alpacatalk.trading.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /** Server API models deliberately contain no raw broker credentials or persistent secret fields. */
 @Serializable
@@ -70,7 +71,28 @@ data class AutomationStatusResponse(
     val message: String? = null,
     @SerialName("kill_switch_active") val killSwitchActive: Boolean? = null,
     @SerialName("last_updated") val lastUpdated: String? = null,
+    @SerialName("worker_healthy") val workerHealthy: Boolean? = null,
+    @SerialName("worker_last_seen") val workerLastSeen: String? = null,
     val reason: String? = null,
+)
+
+@Serializable
+data class RiskConfigResponse(
+    val environment: String? = null,
+    val complete: Boolean = false,
+    val config: JsonObject? = null,
+    @SerialName("configuration_fingerprint") val configurationFingerprint: String? = null,
+)
+
+@Serializable
+data class WatchlistResponse(
+    val environment: String? = null,
+    val symbols: List<String> = emptyList(),
+)
+
+@Serializable
+data class WatchlistUpdateRequest(
+    val symbols: List<String>,
 )
 
 @Serializable
@@ -135,6 +157,8 @@ data class TradingUiState(
     val environmentDetails: EnvironmentResponse? = null,
     val account: AccountResponse? = null,
     val automation: AutomationStatusResponse? = null,
+    val riskConfig: RiskConfigResponse? = null,
+    val watchlist: WatchlistResponse? = null,
     val health: HealthResponse? = null,
     val screenData: Map<String, RemoteScreenData> = emptyMap(),
 ) {

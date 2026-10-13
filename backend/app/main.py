@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import (
@@ -40,6 +40,8 @@ from app.models import (
     PositionSnapshot,
     RiskConfiguration,
     Signal,
+    StrategyConfig,
+    SystemHealthEvent,
     User,
     utcnow,
 )
@@ -61,6 +63,8 @@ from app.schemas import (
     RiskConfigResponse,
     SessionResponse,
     UnlockRequest,
+    WatchlistResponse,
+    WatchlistUpdateRequest,
 )
 from app.security import authenticate_bootstrap_passphrase, issue_session_token, require_session
 from app.services.audit import record_audit
@@ -73,6 +77,7 @@ from app.services.connection import (
 from app.services.execution import execute_order_intent
 
 logger = logging.getLogger("alpaca_killer")
+WORKER_HEARTBEAT_MAX_AGE = timedelta(minutes=15)
 
 
 def _fingerprint(config: dict[str, Any]) -> str:
@@ -145,6 +150,25 @@ def _kill_state(db: Session, user_id: str) -> KillSwitchState:
         db.add(state)
         db.flush()
     return state
+
+
+def _paper_worker_status(db: Session) -> tuple[bool, datetime | None]:
+    latest = db.scalar(
+        select(SystemHealthEvent)
+        .where(SystemHealthEvent.component == "paper-worker", SystemHealthEvent.environment == "paper")
+        .order_by(SystemHealthEvent.created_at.desc())
+        .limit(1)
+    )
+    if latest is None:
+        return False, None
+    last_seen = latest.created_at
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=UTC)
+    healthy = (
+        latest.status == "HEALTHY"
+        and datetime.now(UTC) - last_seen <= WORKER_HEARTBEAT_MAX_AGE
+    )
+    return healthy, last_seen
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -691,6 +715,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         automation = _ensure_automation(db, user_id, environment)
         kill = _kill_state(db, user_id)
+        worker_healthy, worker_last_seen = (
+            _paper_worker_status(db) if environment == Environment.PAPER else (None, None)
+        )
         db.commit()
         return AutomationResponse(
             environment=environment,
@@ -700,7 +727,72 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             message="Automation unavailable while kill switch is active"
             if kill.active
             else "Automation status verified",
+            worker_healthy=worker_healthy,
+            worker_last_seen=worker_last_seen,
         )
+
+    @app.get(
+        "/api/v1/automation/watchlist", response_model=WatchlistResponse, tags=["automation"]
+    )
+    def get_paper_watchlist(
+        _: str = Depends(require_session), db: Session = Depends(get_db)
+    ) -> WatchlistResponse:
+        stored = db.scalar(
+            select(StrategyConfig).where(
+                StrategyConfig.environment == "paper",
+                StrategyConfig.strategy_name == "watchlist",
+            )
+        )
+        symbols = stored.config_json.get("symbols", []) if stored and stored.enabled else []
+        return WatchlistResponse(symbols=[str(item).upper() for item in symbols])
+
+    @app.put(
+        "/api/v1/automation/watchlist", response_model=WatchlistResponse, tags=["automation"]
+    )
+    def put_paper_watchlist(
+        payload: WatchlistUpdateRequest,
+        user_id: str = Depends(require_session),
+        db: Session = Depends(get_db),
+    ) -> WatchlistResponse:
+        stored = db.scalar(
+            select(StrategyConfig).where(
+                StrategyConfig.environment == "paper",
+                StrategyConfig.strategy_name == "watchlist",
+            )
+        )
+        if stored is None:
+            stored = StrategyConfig(
+                environment="paper",
+                strategy_name="watchlist",
+                enabled=True,
+                config_json={"symbols": payload.symbols},
+            )
+            db.add(stored)
+        else:
+            stored.enabled = True
+            stored.config_json = {"symbols": payload.symbols}
+        record_audit(
+            db,
+            event_type="PAPER_WATCHLIST_UPDATED",
+            actor=user_id,
+            environment="paper",
+            payload={"symbols": payload.symbols},
+        )
+        db.commit()
+        return WatchlistResponse(symbols=payload.symbols)
+
+    @app.get("/api/v1/automation/worker-status", tags=["automation"])
+    def paper_worker_status(
+        _: str = Depends(require_session), db: Session = Depends(get_db)
+    ) -> dict[str, Any]:
+        healthy, last_seen = _paper_worker_status(db)
+        return {
+            "environment": "paper",
+            "healthy": healthy,
+            "last_seen": last_seen,
+            "message": "Paper worker heartbeat is current" if healthy else "Paper worker is not running or its heartbeat is stale",
+            "max_heartbeat_age_seconds": int(WORKER_HEARTBEAT_MAX_AGE.total_seconds()),
+        }
 
     @app.post(
         "/api/v1/automation/enable-paper", response_model=AutomationResponse, tags=["automation"]
@@ -721,8 +813,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="Configure paper risk limits before enabling automation"
             )
+        watchlist = db.scalar(
+            select(StrategyConfig).where(
+                StrategyConfig.environment == "paper",
+                StrategyConfig.strategy_name == "watchlist",
+                StrategyConfig.enabled.is_(True),
+            )
+        )
+        if watchlist is None or not watchlist.config_json.get("symbols"):
+            raise HTTPException(
+                status_code=409, detail="Configure a paper watchlist before enabling automation"
+            )
+        worker_healthy, worker_last_seen = _paper_worker_status(db)
+        if not worker_healthy:
+            raise HTTPException(
+                status_code=409,
+                detail="Paper worker is not running or its heartbeat is stale; no automation was enabled",
+            )
         automation = _ensure_automation(db, user_id, Environment.PAPER)
         automation.enabled = True
+        automation.enabled_at = utcnow()
         connection.automation_enabled = True
         record_audit(
             db,
@@ -738,6 +848,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             reduce_only=automation.reduce_only,
             kill_switch_active=False,
             message="Paper automation enabled",
+            worker_healthy=worker_healthy,
+            worker_last_seen=worker_last_seen,
         )
 
     @app.post(
