@@ -7,7 +7,13 @@ from app.broker import VerifiedAccount
 from app.config import Settings
 from app.db import create_database_engine, create_session_factory, initialize_database
 from app.main import create_app
-from app.models import BrokerConnection
+from app.models import (
+    BrokerConnection,
+    RiskConfiguration,
+    StrategyConfig,
+    SystemHealthEvent,
+    User,
+)
 from app.services.connection import validate_and_store_connection
 
 
@@ -61,6 +67,10 @@ def test_authenticated_api_has_health_risk_and_kill_switch(tmp_path: Path) -> No
         headers = {"Authorization": f"Bearer {token}"}
         assert client.get("/api/v1/health").json()["status"] == "ok"
         assert client.get("/api/v1/risk/config", headers=headers).json()["complete"] is False
+        automation = client.get("/api/v1/automation/status", headers=headers)
+        assert automation.status_code == 200
+        assert automation.json()["worker_healthy"] is False
+        assert client.get("/api/v1/automation/worker-status", headers=headers).json()["healthy"] is False
         kill = client.post(
             "/api/v1/kill-switch/activate", headers=headers, json={"reason": "test emergency stop"}
         )
@@ -103,3 +113,135 @@ def test_live_activation_is_disabled_by_deployment_policy(tmp_path: Path) -> Non
         )
     assert response.status_code == 503
     assert "disabled by deployment policy" in response.json()["detail"]
+
+
+def test_paper_watchlist_is_normalized_and_invalid_symbols_are_rejected(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url=f"sqlite:///{tmp_path / 'watchlist.db'}",
+        jwt_secret=TEST_JWT_SECRET,
+        bootstrap_passphrase=TEST_PASSPHRASE,
+    )
+    with TestClient(create_app(settings)) as client:
+        session = client.post("/api/v1/auth/session", json={"passphrase": TEST_PASSPHRASE})
+        headers = {"Authorization": f"Bearer {session.json()['access_token']}"}
+        saved = client.put(
+            "/api/v1/automation/watchlist",
+            headers=headers,
+            json={"symbols": [" aapl ", "MSFT", "AAPL"]},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["symbols"] == ["AAPL", "MSFT"]
+        assert client.get("/api/v1/automation/watchlist", headers=headers).json()["symbols"] == [
+            "AAPL",
+            "MSFT",
+        ]
+        invalid = client.put(
+            "/api/v1/automation/watchlist",
+            headers=headers,
+            json={"symbols": ["BAD SYMBOL"]},
+        )
+        assert invalid.status_code == 422
+
+
+def test_paper_enable_requires_fresh_worker_heartbeat(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url=f"sqlite:///{tmp_path / 'paper-enable.db'}",
+        jwt_secret=TEST_JWT_SECRET,
+        bootstrap_passphrase=TEST_PASSPHRASE,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        session = client.post("/api/v1/auth/session", json={"passphrase": TEST_PASSPHRASE})
+        headers = {"Authorization": f"Bearer {session.json()['access_token']}"}
+        with app.state.session_factory() as db:
+            db.add(User(id="owner", username="owner"))
+            db.flush()
+            db.add(
+                BrokerConnection(
+                    user_id="owner",
+                    environment="paper",
+                    account_id_masked="****1234",
+                    account_status="ACTIVE",
+                    encrypted_api_key="ciphertext-key",
+                    encrypted_api_secret="ciphertext-secret",
+                )
+            )
+            db.add(
+                RiskConfiguration(
+                    user_id="owner",
+                    environment="paper",
+                    complete=True,
+                    config_json={"max_risk_per_trade_pct": 0.005},
+                )
+            )
+            db.add(
+                StrategyConfig(
+                    environment="paper",
+                    strategy_name="watchlist",
+                    enabled=True,
+                    config_json={"symbols": ["AAPL"]},
+                )
+            )
+            db.commit()
+        response = client.post("/api/v1/automation/enable-paper", headers=headers)
+        assert response.status_code == 409
+        assert "worker" in response.json()["detail"].lower()
+        assert client.get("/api/v1/automation/status", headers=headers).json()["enabled"] is False
+
+
+def test_paper_enable_succeeds_after_current_worker_heartbeat(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url=f"sqlite:///{tmp_path / 'paper-enable-ready.db'}",
+        jwt_secret=TEST_JWT_SECRET,
+        bootstrap_passphrase=TEST_PASSPHRASE,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        session = client.post("/api/v1/auth/session", json={"passphrase": TEST_PASSPHRASE})
+        headers = {"Authorization": f"Bearer {session.json()['access_token']}"}
+        with app.state.session_factory() as db:
+            db.add(User(id="owner", username="owner"))
+            db.flush()
+            db.add(
+                BrokerConnection(
+                    user_id="owner",
+                    environment="paper",
+                    account_id_masked="****1234",
+                    account_status="ACTIVE",
+                    encrypted_api_key="ciphertext-key",
+                    encrypted_api_secret="ciphertext-secret",
+                )
+            )
+            db.add(
+                RiskConfiguration(
+                    user_id="owner",
+                    environment="paper",
+                    complete=True,
+                    config_json={"max_risk_per_trade_pct": 0.005},
+                )
+            )
+            db.add(
+                StrategyConfig(
+                    environment="paper",
+                    strategy_name="watchlist",
+                    enabled=True,
+                    config_json={"symbols": ["AAPL"]},
+                )
+            )
+            db.add(
+                SystemHealthEvent(
+                    component="paper-worker",
+                    status="HEALTHY",
+                    message="Test heartbeat",
+                    environment="paper",
+                )
+            )
+            db.commit()
+        response = client.post("/api/v1/automation/enable-paper", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
+        assert response.json()["worker_healthy"] is True
+        assert client.get("/api/v1/automation/status", headers=headers).json()["enabled"] is True

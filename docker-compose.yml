@@ -20,6 +20,25 @@ services:
       retries: 3
       start_period: 30s
 
+  paper-worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://alpaca:${POSTGRES_PASSWORD}@postgres:5432/alpaca_killer
+      APP_ENV: production
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-300}
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
   postgres:
     image: postgres:16-alpine
     environment:

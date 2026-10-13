@@ -416,16 +416,34 @@ private fun AccountScreen(state: TradingUiState) {
 
 @Composable
 private fun RiskScreen(state: TradingUiState, viewModel: TradingViewModel) {
+    var riskJson by remember(state.riskConfig?.configurationFingerprint) {
+        mutableStateOf(state.riskConfig?.config?.toString().orEmpty())
+    }
     ScreenColumn {
         Text("Risk", style = MaterialTheme.typography.titleLarge)
-        Text("Risk limits and live activation are evaluated server-side. This client cannot bypass them.")
+        Text("Paper risk limits are validated by the backend and are required before paper automation can be enabled. This screen does not enable live trading.")
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                DetailRow("Verified environment", state.environment.name)
+                DetailRow("Currently verified account", state.environment.name)
                 DetailRow("Automation status", automationText(state.automation))
-                DetailRow("Trading blocked", state.environmentDetails?.tradingBlocked?.toString() ?: "Unknown")
-                DetailRow("Data freshness", "Server-provided risk gate")
+                DetailRow("Current account trading blocked", state.environmentDetails?.tradingBlocked?.toString() ?: "Unknown")
+                DetailRow("Paper risk configuration", if (state.riskConfig?.complete == true) "Complete" else "Not configured")
             }
+        }
+        Text("Enter a JSON object with: max_risk_per_trade_pct, max_position_notional, max_instrument_exposure, max_portfolio_exposure, max_open_positions, max_daily_loss, max_weekly_loss, max_drawdown_pct, max_order_frequency_per_hour, max_slippage_bps, max_spread_bps, min_liquidity_usd, stale_data_seconds, news_blackout_minutes, and reduce_only.")
+        OutlinedTextField(
+            value = riskJson,
+            onValueChange = { riskJson = it },
+            label = { Text("Paper risk limits (JSON)") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 10,
+        )
+        Button(
+            onClick = { viewModel.saveRiskConfig(riskJson) },
+            enabled = !state.isActionInProgress && !state.backendOffline,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (state.isActionInProgress) LoadingLabel("Saving") else Text("Save paper risk limits")
         }
         BackendPayloadPanel(Destination.RISK.route, "/api/v1/risk/config", state, viewModel)
     }
@@ -433,10 +451,36 @@ private fun RiskScreen(state: TradingUiState, viewModel: TradingViewModel) {
 
 @Composable
 private fun AutomationScreen(state: TradingUiState, viewModel: TradingViewModel) {
+    var symbolsText by remember(state.watchlist?.symbols) {
+        mutableStateOf(state.watchlist?.symbols?.joinToString(", ").orEmpty())
+    }
+    var confirmEnable by remember { mutableStateOf(false) }
     ScreenColumn {
         Text("Automation", style = MaterialTheme.typography.titleLarge)
-        Text("The backend controls automation and all broker submissions. This app exposes only safe disable and kill-switch actions.")
+        Text("Paper automation only. The backend controls strategy evaluation, risk checks, and any paper-account orders. Live trading is not enabled from this screen.")
         AutomationSummaryCard(state.automation)
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Paper worker readiness", fontWeight = FontWeight.Bold)
+                DetailRow("Heartbeat", if (state.automation?.workerHealthy == true) "Healthy" else "Not running / stale")
+                DetailRow("Last seen", state.automation?.workerLastSeen ?: "Not available")
+                Text("The worker must run continuously on the same persistent deployment. A sleeping free-tier web service cannot run this worker reliably.")
+            }
+        }
+        OutlinedTextField(
+            value = symbolsText,
+            onValueChange = { symbolsText = it },
+            label = { Text("Paper watchlist (comma-separated tickers)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        OutlinedButton(
+            onClick = { viewModel.savePaperWatchlist(symbolsText) },
+            enabled = !state.isActionInProgress && !state.backendOffline,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Save paper watchlist")
+        }
         if (state.automation?.enabled == true) {
             Button(
                 onClick = viewModel::disableAutomation,
@@ -446,7 +490,28 @@ private fun AutomationScreen(state: TradingUiState, viewModel: TradingViewModel)
                 if (state.isActionInProgress) LoadingLabel("Disabling") else Text("Disable automation")
             }
         } else {
-            EmptyPanel("Automation is disabled or its status is not yet available. Live automation cannot be enabled from this client screen.")
+            Text("Enabling requires a verified paper connection, complete paper risk limits, a saved watchlist, and a healthy worker heartbeat.")
+            Button(
+                onClick = { confirmEnable = true },
+                enabled = !state.isActionInProgress && !state.backendOffline,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Enable paper automation")
+            }
+        }
+        if (confirmEnable) {
+            AlertDialog(
+                onDismissRequest = { confirmEnable = false },
+                title = { Text("Enable paper automation?") },
+                text = { Text("This enables the server-side strategy worker for the verified paper account. It can submit simulated orders to the broker's paper environment, not a live account. The risk engine and kill switch remain in force.") },
+                dismissButton = { TextButton(onClick = { confirmEnable = false }) { Text("Cancel") } },
+                confirmButton = {
+                    Button(onClick = {
+                        confirmEnable = false
+                        viewModel.enablePaperAutomation()
+                    }, enabled = !state.isActionInProgress) { Text("Enable paper") }
+                },
+            )
         }
     }
 }
@@ -581,6 +646,7 @@ private fun AutomationSummaryCard(automation: AutomationStatusResponse?) {
             DetailRow("Status", automationText(automation))
             DetailRow("Kill switch", if (automation?.killSwitchActive == true) "ACTIVE" else "Not active / unknown")
             DetailRow("Reason", automation?.reason ?: "Not available")
+            DetailRow("Paper worker", if (automation?.workerHealthy == true) "Healthy" else "Unavailable")
             DetailRow("Last update", automation?.lastUpdated ?: "Not available")
         }
     }

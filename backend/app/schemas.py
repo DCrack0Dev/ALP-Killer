@@ -99,6 +99,33 @@ class AutomationResponse(BaseModel):
     reduce_only: bool
     kill_switch_active: bool
     message: str
+    worker_healthy: bool | None = None
+    worker_last_seen: datetime | None = None
+
+
+class WatchlistUpdateRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 20 or not all(
+                char.isascii() and (char.isalnum() or char in "./-") for char in symbol
+            ):
+                raise ValueError("Watchlist symbols must be valid ticker identifiers")
+            if symbol not in normalized:
+                normalized.append(symbol)
+        if not normalized:
+            raise ValueError("At least one watchlist symbol is required")
+        return normalized
+
+
+class WatchlistResponse(BaseModel):
+    environment: Environment = Environment.PAPER
+    symbols: list[str]
 
 
 class KillSwitchRequest(BaseModel):

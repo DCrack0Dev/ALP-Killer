@@ -55,8 +55,9 @@ Allow only TCP/443 in the host firewall. Keep SSH restricted to a VPN or known a
 2. Install the debug APK with `adb install -r app-debug.apk`, or distribute the release through a private testing channel.
 3. Enter the full private HTTPS URL and backend unlock passphrase.
 4. Connect **paper** credentials first. The backend verifies the result server-side and the app shows the persistent paper banner.
-5. Set paper risk limits, run backtests, and monitor paper behavior. Do not assume paper results match live conditions.
-6. If and only if you intend to trade real money, connect a separate live key pair, review the red live banner and exact risk-limit fingerprint, then complete the explicit live activation flow.
+5. Enter paper risk limits in the app's Risk screen and set a paper watchlist in Automation. Review every limit before saving it.
+6. Confirm the paper worker heartbeat is healthy, then explicitly enable paper automation. The app asks for confirmation; no live-account enable control is exposed in this Android build.
+7. Do not use a sleeping/free web service for unattended automation. The API and persistent worker must share a continuously available private host and database; the free Render web service currently deploys only the API and is not an always-on worker host.
 
 ## 5. Backups, monitoring, and upgrades
 
@@ -64,4 +65,4 @@ Back up the encrypted PostgreSQL volume before upgrades. Store database backups 
 
 ## 6. Worker operation
 
-The provided API exposes guarded services and WebSocket status. A production worker should run as a distinct persistent process/container under the same environment: refresh broker state, run approved strategies, call the risk engine, stream Alpaca trade updates, and reconcile state. It must stop submitting new orders if the health check fails or the kill switch is active. See the documented limitations before enabling automation.
+Docker Compose starts the API, PostgreSQL, and a distinct `paper-worker` container. The worker polls at `WORKER_POLL_SECONDS` (minimum 30 seconds), reads market/account data, evaluates the configured paper strategy, and sends any approved orders only to the verified paper environment. Automation defaults to off. A worker process restart automatically disarms paper automation; review readiness and explicitly enable it again. The kill switch remains available in the app. Do not set `ALLOW_LIVE_TRADING=true` for this Android client.

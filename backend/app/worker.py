@@ -639,12 +639,42 @@ def run_cycle(
     return counters
 
 
+def _disarm_paper_automation_on_start(db: Session) -> None:
+    active = db.scalars(
+        select(AutomationState).where(
+            AutomationState.environment == "paper", AutomationState.enabled.is_(True)
+        )
+    ).all()
+    for automation in active:
+        automation.enabled = False
+        automation.enabled_at = None
+        record_audit(
+            db,
+            event_type="PAPER_WORKER_RESTARTED_AUTOMATION_DISABLED",
+            actor="paper-worker",
+            environment="paper",
+            payload={"automation_id": automation.id, "explicit_reenable_required": True},
+        )
+    connections = db.scalars(
+        select(BrokerConnection).where(
+            BrokerConnection.environment == "paper",
+            BrokerConnection.disconnected_at.is_(None),
+            BrokerConnection.automation_enabled.is_(True),
+        )
+    ).all()
+    for connection in connections:
+        connection.automation_enabled = False
+    db.commit()
+
+
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     settings: Settings = get_settings()
     engine = create_database_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     poll_seconds = max(30, int(os.getenv("WORKER_POLL_SECONDS", DEFAULT_POLL_SECONDS)))
+    with session_factory() as db:
+        _disarm_paper_automation_on_start(db)
     while True:
         try:
             with session_factory() as db:

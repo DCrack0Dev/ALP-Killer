@@ -11,6 +11,7 @@ import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -21,13 +22,15 @@ import io.ktor.serialization.kotlinx.json.json
 import java.net.URI
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 /** Errors retain only HTTP status/detail and must never include request secrets. */
 class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
 
 /**
  * HTTPS client for the server-controlled trading API. There is intentionally no order-submission
- * method: only the backend's automation service can send broker orders.
+ * method: paper automation is explicitly enabled through guarded backend controls; the backend
+ * remains the sole authority for every broker order.
  */
 class ApiClient private constructor(
     private val baseUrl: String,
@@ -67,6 +70,29 @@ class ApiClient private constructor(
 
     suspend fun automationStatus(): AutomationStatusResponse =
         decode(client.get(url("/api/v1/automation/status")) { authorized() })
+
+    suspend fun riskConfig(): RiskConfigResponse =
+        decode(client.get(url("/api/v1/risk/config?environment=paper")) { authorized() })
+
+    suspend fun updateRiskConfig(config: JsonObject): RiskConfigResponse =
+        decode(client.put(url("/api/v1/risk/config?environment=paper")) {
+            authorized()
+            contentType(ContentType.Application.Json)
+            setBody(config)
+        })
+
+    suspend fun watchlist(): WatchlistResponse =
+        decode(client.get(url("/api/v1/automation/watchlist")) { authorized() })
+
+    suspend fun updateWatchlist(symbols: List<String>): WatchlistResponse =
+        decode(client.put(url("/api/v1/automation/watchlist")) {
+            authorized()
+            contentType(ContentType.Application.Json)
+            setBody(WatchlistUpdateRequest(symbols))
+        })
+
+    suspend fun enablePaperAutomation(): AutomationStatusResponse =
+        decode(client.post(url("/api/v1/automation/enable-paper")) { authorized() })
 
     suspend fun disableAutomation(environment: String): ActionResponse =
         decode(client.post(url("/api/v1/automation/disable?environment=$environment")) {
